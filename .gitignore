@@ -1,0 +1,5 @@
+build/
+result/
+models/
+
+*.pro.user
