@@ -11,7 +11,9 @@ CONFIG += c++17
 
 SOURCES += \
     main.cpp \
+    src/core/Consumer.cpp \
     src/core/FeatureExtractor.cpp \
+    src/core/TaskQueue.cpp \
     src/ui/MetalSurfaceDetection.cpp \
     src/ui/tabs/ConfusionMatrixWidget.cpp \
     src/ui/tabs/SingleImageTab.cpp \
@@ -27,8 +29,10 @@ SOURCES += \
     src/utils/qcustomplot.cpp
 
 HEADERS += \
+    include/core/Consumer.h \
     include/core/FeatureExtractor.h \
     include/core/PredictionResult.h \
+    include/core/TaskQueue.h \
     include/ui/MetalSurfaceDetection.h \
     include/ui/tabs/ConfusionMatrixWidget.h \
     include/ui/tabs/SingleImageTab.h \

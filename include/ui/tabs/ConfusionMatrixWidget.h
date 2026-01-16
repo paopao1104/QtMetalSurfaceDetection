@@ -25,9 +25,12 @@ public:
     void setMatrixData(const QVector<QVector<int>>& confusionMatrix);
     void setCategoryNames(QStringList names);
     void setData(const QVector<PredictionResult>& results);
+    void saveAsImage(const QString& filePath);
+    void clear();
 private:
     void calculateMatrixs(const QVector<PredictionResult>& results);
     void setupPlot();
+
 private:
     QCustomPlot* m_customPlot;
 

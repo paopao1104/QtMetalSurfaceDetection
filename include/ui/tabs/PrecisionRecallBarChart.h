@@ -29,13 +29,14 @@ public:
     void updateChart();
     void setShowF1Score(bool show);
     void setTargetThreshold(double threshold);
-    void exportChart(const QString& filePath);
+    void saveAsImage(const QString& filePath);
 
 private:
     void setupChart();
     void addThresholdLine();
     void createCustomToolTips();
     void computeClassMetrics(const QVector<PredictionResult>& results);
+
 private:
     QChart* m_chart;
     QChartView* m_chartView;

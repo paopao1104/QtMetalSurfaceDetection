@@ -152,6 +152,11 @@ void ConfusionMatrixWidget::setupPlot()
     m_customPlot->replot();
 }
 
+void ConfusionMatrixWidget::saveAsImage(const QString& filePath)
+{
+    m_customPlot->savePng(filePath, 800, 600);
+}
+
 void ConfusionMatrixWidget::setMatrixData(const QVector<QVector<int>>& confusionMatrix)
 {
     m_confusionMatrix = confusionMatrix;
@@ -160,4 +165,11 @@ void ConfusionMatrixWidget::setMatrixData(const QVector<QVector<int>>& confusion
 void ConfusionMatrixWidget::setCategoryNames(QStringList names)
 {
     m_categoryNames = {"Crazing", "Inclusion", "Patches", "Pitted"};
+}
+
+void ConfusionMatrixWidget::clear()
+{
+    m_confusionMatrix.clear();
+    m_customPlot->clearPlottables();
+    m_categoryNames.clear();
 }

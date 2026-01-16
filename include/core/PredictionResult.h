@@ -42,6 +42,45 @@ struct PredictionResult
     QString modelName;
     QString modelPath;
 
+    bool isCorrect() const
+    {
+        return processingSuccess && trueLabel == predictLabel;
+    }
+
+    bool isFalsePositive() const {
+        return processingSuccess && !trueLabel.isEmpty() &&
+               trueLabel != predictLabel;
+    }
+
+    bool isFalseNegative() const {
+        return processingSuccess && !trueLabel.isEmpty() &&
+               trueLabel != predictLabel &&
+               predictLabel == "无缺陷" &&
+               trueLabel != "无缺陷";
+    }
+
+    bool isTruePositive() const {
+        return processingSuccess && !trueLabel.isEmpty() &&
+               trueLabel != "无缺陷" &&
+               trueLabel == predictLabel;
+    }
+
+    bool isTrueNegative() const {
+        return processingSuccess && !trueLabel.isEmpty() &&
+               trueLabel == "无缺陷" &&
+               predictLabel == "无缺陷";
+    }
+
+    QString getErrorType() const
+    {
+        if(!processingSuccess)  return "处理失败";
+        if(trueLabel.isEmpty()) return "未标注";
+        if(isCorrect())         return "正确";
+        if (isFalsePositive())  return "误报(FP)";
+        if (isFalseNegative())  return "漏报(FN)";
+        return "分类错误";
+    }
+
     DefectType getClassIdFromName(const QString& className){
         DefectType type;
         if(className == "Crazing")

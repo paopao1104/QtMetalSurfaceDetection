@@ -119,6 +119,8 @@ void PrecisionRecallBarChart::updateChart()
     if(m_showF1Score)
         f1Set = new QBarSet("F1分数");
 
+    QStringList categories;
+
     // 填充数据
     for(const auto& metric : m_metrics)
     {
@@ -227,9 +229,12 @@ void PrecisionRecallBarChart::setTargetThreshold(double threshold)
     m_targetThreshold = threshold;
 }
 
-void PrecisionRecallBarChart::exportChart(const QString& filePath)
+void PrecisionRecallBarChart::saveAsImage(const QString& filePath)
 {
-
+    QPixmap pixmap = m_chartView->grab().scaled(800, 600,
+                                              Qt::KeepAspectRatio,
+                                              Qt::SmoothTransformation);
+    pixmap.save(filePath);
 }
 
 

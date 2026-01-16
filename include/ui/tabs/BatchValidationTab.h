@@ -17,6 +17,7 @@ class QProgressBar;
 class QThread;
 class ConfusionMatrixWidget;
 class PrecisionRecallBarChart;
+class TaskQueue;
 
 struct PredictionResult;
 
@@ -30,8 +31,10 @@ public:
     explicit BatchValidationWorker(QObject* parent = nullptr);
 
 public slots:
-    void  startBatchValidation(const QString& datasetPath, const QString& modelPath, const QString& datasetType);
+    void startBatchValidation(const QString& datasetPath, const QString& modelPath, const QString& datasetType);
     void stopBatchValidation();
+    void onResultReady(const PredictionResult& result, bool imgEmpty);
+    void onConsumerUpdated(const QString& imgPath);
 
 signals:
     void progressUpdated(int current, int total, const QString& curretFile);
@@ -41,8 +44,18 @@ signals:
     void errorOccurred(const QString& error);
 
 private:
+    void singleThread(const QString& datasetPath, const QString& modelPath, const QString& datasetType);
+    void multiThreads(const QString& datasetPath, const QString& modelPath, const QString& datasetType);
+
+private:
     bool m_stopRequested;
     QMutex m_mutex;
+    QVector<PredictionResult> m_allResults;
+    int curSize;
+    int totalSize;
+    TaskQueue* m_taskQueue;
+
+    int m_runningThreads;
 };
 
 /**
@@ -58,7 +71,7 @@ public:
     void setRootPath(const QString& rootPath);
 
 public slots:
-    void onRadioBtnClicked();
+    void datasetPathChanged();
     void onStartBatchValidation();
     void onStopBatchValidation();
     void handleProgressUpdate(int current, int total, const QString& curretFile);
@@ -71,11 +84,10 @@ public slots:
     void onViewErrorSampleBtnClicked();
 private:
     void setupUI();
-    void setupComponents();
-    void setupCharts();
     void setupTable();
     void setupWokerThread();
     void setupConnection();
+    bool exportToCSV(const QString& filePath);
     void clearResults();
     void updateValidationControls(bool running);
 
@@ -107,12 +119,7 @@ private:
     PrecisionRecallBarChart* m_precisionRecallChart;
 
     QString m_datasetPath;
-    QStringList m_modelNameList;
     QString m_modelsPath;
-    bool m_loadFlag{false};
-
-    QChartView* m_confusionChart;
-    QChartView* m_prChart;
 
     bool m_hasDataset{false};
 
@@ -123,7 +130,6 @@ private:
     QDateTime m_validationStartTime;
 
     QVector<PredictionResult> m_currentResults;
-    QVector<PredictionResult> m_filteredResults;
 };
 
 #endif

@@ -1,11 +1,13 @@
 #include "ui/tabs/BatchValidationTab.h"
-#include "data/DatasetModel.h"
 #include "ui/tabs/PrecisionRecallBarChart.h"
 #include "ui/tabs/ConfusionMatrixWidget.h"
 #include "utils/Logger.h"
+#include "data/DatasetModel.h"
 #include "core/ImageProcessor.h"
 #include "core/FeatureExtractor.h"
 #include "core/Classifier.h"
+#include "core/TaskQueue.h"
+#include "core/Consumer.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -23,14 +25,46 @@
 #include <QThread>
 #include <QMetaObject>
 #include <QDirIterator>
+#include <QFileDialog>
+#include <QStandardPaths>
 
-BatchValidationWorker::BatchValidationWorker(QObject* parent) : QObject(parent), m_stopRequested(false)
+BatchValidationWorker::BatchValidationWorker(QObject* parent)
+    : QObject(parent),
+    m_stopRequested(false),
+    curSize(1),
+    totalSize(0)
 {
 }
 
 void BatchValidationWorker::startBatchValidation(const QString& datasetPath, const QString& modelPath, const QString& datasetType)
 {
+    // singleThread(datasetPath, modelPath, datasetType);
+    multiThreads(datasetPath, modelPath, datasetType);
+}
+
+void BatchValidationWorker::stopBatchValidation()
+{
+    m_stopRequested = true;
+}
+
+void BatchValidationWorker::onResultReady(const PredictionResult& result, bool imgEmpty)
+{
+    m_allResults.append(result);
+
+    if(!imgEmpty)
+        emit singleResultReady(result);
+}
+
+void BatchValidationWorker::onConsumerUpdated(const QString& imgPath)
+{
+    emit progressUpdated(curSize++, totalSize, imgPath);
+}
+
+void BatchValidationWorker::singleThread(const QString& datasetPath, const QString& modelPath, const QString& datasetType)
+{
     m_stopRequested = false;
+    curSize = 1;
+    totalSize = 0;
 
     try
     {
@@ -158,11 +192,82 @@ void BatchValidationWorker::startBatchValidation(const QString& datasetPath, con
     catch(const std::exception& e){
         emit errorOccurred(QString("验证过程异常：%1").arg(e.what()));
     }
+
 }
 
-void BatchValidationWorker::stopBatchValidation()
+void BatchValidationWorker::multiThreads(const QString& datasetPath, const QString& modelPath, const QString& datasetType)
 {
-    m_stopRequested = true;
+    m_stopRequested = false;
+
+    try
+    {
+        // 1. 加载模型
+        LOG_INFO(QString("开始加载模型: %1").arg(modelPath));
+        if(!DatasetModel::instance()->loadModel(modelPath))
+        {
+            emit errorOccurred(QString("模型加载失败: %1").arg(modelPath));
+            return;
+        }
+
+        // 2. 准备图像处理器和特征提取器
+        ImageProcessor imgProcessor;
+        FeatureExtractor featureExtractor;
+        Classifier classifier;
+
+        // 3. 获取数据集文件列表
+        QStringList imgExtensions = {"*.bmp"};
+        QVector<QString> imgFiles;
+        QDirIterator it(datasetPath, imgExtensions, QDir::Files, QDirIterator::Subdirectories);
+        while(it.hasNext())
+            imgFiles.append(it.next());
+
+        if(imgFiles.empty())
+        {
+            emit errorOccurred(QString("数据集为空: %1").arg(datasetPath));
+            return;
+        }
+
+        totalSize = imgFiles.size();
+        LOG_INFO(QString("开始批量验证, 共 %1 个图像").arg(imgFiles.size()));
+
+        // 创建任务队列
+        m_taskQueue = new TaskQueue();
+        for(const QString& imgPath : imgFiles)
+            m_taskQueue->enqueue(imgPath);
+        m_taskQueue->setFinished(); // 生产完成
+
+        // 创建消费者线程
+        int threadCount = QThread::idealThreadCount();
+        QList<Consumer*> consumers;
+        for(int i = 0 ; i < threadCount; ++i)
+        {
+            Consumer* consumer = new Consumer(m_taskQueue);
+            connect(consumer, &Consumer::resultReady, this, &BatchValidationWorker::onResultReady);
+            connect(consumer, &Consumer::progressUpdated, this, &BatchValidationWorker::onConsumerUpdated);
+            connect(consumer, &QThread::finished, consumer, &Consumer::deleteLater);
+            consumers.append(consumer);
+        }
+
+        // 连接所有消费者线程完成信号，我们需要知道何时所有线程完成
+        // 使用计数器，每个线程完成时，计数器减1
+        m_runningThreads = consumers.size();
+        for(Consumer* consumer : consumers)
+        {
+            connect(consumer, &QThread::finished, this, [this](){
+                m_runningThreads--;
+                if(m_runningThreads == 0)
+                {
+                    emit batchCompleted(m_allResults);
+                    LOG_INFO(QString("批量验证完成: 处理 %1 个图像").arg(m_allResults.size()));
+                }
+            });
+
+            consumer->start();
+        }
+    }
+    catch(const std::exception& e){
+        emit errorOccurred(QString("验证过程异常：%1").arg(e.what()));
+    }
 }
 
 // =================== BatchValidation ===================== //
@@ -197,6 +302,7 @@ void BatchValidation::setRootPath(const QString& rootPath)
     m_rootPath = rootPath;
     QDir dir(rootPath);
     m_hasDataset = dir.exists("valid") && dir.exists("test");
+    datasetPathChanged();
 }
 
 void BatchValidation::setupWokerThread()
@@ -214,8 +320,8 @@ void BatchValidation::setupWokerThread()
 
 void BatchValidation::setupConnection()
 {
-    connect(m_testRadioBtn, &QRadioButton::clicked, this, &BatchValidation::onRadioBtnClicked);
-    connect(m_testRadioBtn, &QRadioButton::clicked, this, &BatchValidation::onRadioBtnClicked);
+    connect(m_validRadioBtn, &QRadioButton::clicked, this, &BatchValidation::datasetPathChanged);
+    connect(m_testRadioBtn, &QRadioButton::clicked, this, &BatchValidation::datasetPathChanged);
     connect(m_startBtn, &QPushButton::clicked, this, &BatchValidation::onStartBatchValidation);
     connect(m_stopBtn, &QPushButton::clicked, this, &BatchValidation::onStopBatchValidation);
     connect(m_csvBtn, &QPushButton::clicked, this, &BatchValidation::onExportCSVReportBtnClicked);
@@ -225,7 +331,7 @@ void BatchValidation::setupConnection()
     // 工作线程
     connect(m_worker, &BatchValidationWorker::progressUpdated, this, &BatchValidation::handleProgressUpdate);
     connect(m_worker, &BatchValidationWorker::singleResultReady, this, &BatchValidation::handleSingleResult);
-    connect(m_worker, &BatchValidationWorker::validationStopped, this, &BatchValidation::onStartBatchValidation);
+    connect(m_worker, &BatchValidationWorker::validationStopped, this, &BatchValidation::onStopBatchValidation);
     connect(m_worker, &BatchValidationWorker::batchCompleted, this, &BatchValidation::handleBatchCompleted);
     connect(m_worker, &BatchValidationWorker::errorOccurred, this, &BatchValidation::handleErrorOccurred);
 }
@@ -347,16 +453,6 @@ void BatchValidation::setupUI()
     mainLayout->addLayout(rightLayout, 2);
 }
 
-void BatchValidation::setupComponents()
-{
-
-}
-
-void BatchValidation::setupCharts()
-{
-
-}
-
 void BatchValidation::setupTable()
 {
     m_resultsTabel = new QTableWidget();
@@ -376,7 +472,7 @@ void BatchValidation::setupTable()
     m_resultsTabel->setSortingEnabled(true);
 }
 
-void BatchValidation::onRadioBtnClicked()
+void BatchValidation::datasetPathChanged()
 {
     if(!m_hasDataset)
     {
@@ -416,10 +512,10 @@ void BatchValidation::onStartBatchValidation()
     }
 
     // 清空之前的结果
-    clearResults(); // 待实现
+    clearResults();
 
     // 更新UI状态
-    updateValidationControls(true); // 待实现
+    updateValidationControls(true);
     m_statusLabel->setText("正在准备验证...");
 
     // 记录开始时间
@@ -540,15 +636,72 @@ void BatchValidation::handleErrorOccurred(const QString& error)
 
 }
 
+bool BatchValidation::exportToCSV(const QString& filePath)
+{
+    QFile file(filePath);
+    if(!file.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+
+    // 写入表头
+    out << "文件名,真实类别,预测类别,置信度,是否正确,错误类型,处理耗时(ms),图像路径,时间戳\n";
+
+    // 写入数据
+    for(const auto& result : m_currentResults)
+    {
+        out << QString("\"%1\",\"%2\",\"%3\",%4,\"%5\",\"%6\",%7,\"%8\",\"%9\"\n")
+                   .arg(result.imgName)
+                   .arg(result.trueLabel.isEmpty() ? "未知" : result.trueLabel)
+                   .arg(result.predictLabel)
+                   .arg(result.confidence * 100, 0, 'f', 2)
+                   .arg(result.isCorrect() ? "是" : "否")
+                   .arg(result.getErrorType())
+                   .arg(result.totalProcessingTime)
+                   .arg(result.imgPath)
+                   .arg(result.timeStamp.toString(Qt::ISODate));
+    }
+    file.close();
+    return true;
+}
 
 void BatchValidation::onExportCSVReportBtnClicked()
 {
+    if(m_currentResults.empty())
+    {
+        QMessageBox::warning(this, "警告", "没有可导出的数据！");
+        return;
+    }
 
+    QString fileName = QFileDialog::getSaveFileName(this, "导出CSV文件", QString("validation_results_%1.csv").arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss")),
+                                                    "CSV文件 (*.csv)");
+    if(fileName.isEmpty())
+        return;
+
+    if(exportToCSV(fileName))
+    {
+        QMessageBox::information(this, "成功", "CSV文件导出成功");
+        LOG_INFO(QString("CSV文件导出成功：%1").arg(fileName));
+    }
+    else
+        QMessageBox::information(this, "失败", "CSV文件导出失败");
 }
 
 void BatchValidation::onGenerateVisualrReportBtnClicked()
 {
+    if(m_currentResults.isEmpty())
+    {
+        QMessageBox::warning(this, "警告", "没有可导出的数据！");
+        return;
+    }
 
+    QString baseDir = QFileDialog::getExistingDirectory(this, "选择报告保存目录", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+    if(baseDir.isEmpty())
+        return;
+
+    m_confusionMatrixPlot->saveAsImage(QString("%1/Confusion_%2.png").arg(baseDir).arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss")));
+    m_precisionRecallChart->saveAsImage(QString("%1/PrecisionRecall_%2.png").arg(baseDir).arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss")));
 }
 
 void BatchValidation::onViewErrorSampleBtnClicked()
@@ -558,10 +711,31 @@ void BatchValidation::onViewErrorSampleBtnClicked()
 
 void BatchValidation::clearResults()
 {
+    m_currentResults.clear();
+
+    m_resultsTabel->setRowCount(0);
+    m_progressBar->setValue(0);
+    m_statusLabel->setText("就绪");
+
+    m_csvBtn->setEnabled(false);
+    m_visualizationBtn->setEnabled(false);
+    m_errorBtn->setEnabled(false);
+
+    m_hasResults = false;
+
+    m_confusionMatrixPlot->clear();
 
 }
 
 void BatchValidation::updateValidationControls(bool running)
 {
+    m_startBtn->setEnabled(!running);
+    m_stopBtn->setEnabled(running);
 
+    m_csvBtn->setEnabled(!running);
+    m_visualizationBtn->setEnabled(!running);
+    m_errorBtn->setEnabled(!running);
+    m_modelCombo->setEnabled(!running);
 }
+
+
